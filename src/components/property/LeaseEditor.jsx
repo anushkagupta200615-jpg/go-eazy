@@ -18,7 +18,7 @@ export const LeaseEditor = ({ propertyId, userName }) => {
   const [peers, setPeers] = useState(0)
 
   useEffect(() => {
-    // 1. setup quill
+    // init quill
     if (!quillRef.current && editorRef.current) {
       quillRef.current = new Quill(editorRef.current, {
         theme: 'snow',
@@ -34,11 +34,11 @@ export const LeaseEditor = ({ propertyId, userName }) => {
       })
     }
 
-    // 2. setup yjs doc
+    // setup doc
     docRef.current = new Y.Doc()
     const ytext = docRef.current.getText('quill')
 
-    // 3. connect to webrtc (using a unique room name for this property)
+    // connect to webrtc
     const roomName = `goeazy-lease-${propertyId}`
     providerRef.current = new WebrtcProvider(roomName, docRef.current, {
       signaling: ['wss://signaling.yjs.dev', 'wss://y-webrtc-signaling-eu.herokuapp.com']
@@ -53,13 +53,13 @@ export const LeaseEditor = ({ propertyId, userName }) => {
       setPeers(event.webrtcPeers.length)
     })
 
-    // 4. set user info for cursor tracking
+    // set user info for cursor tracking
     providerRef.current.awareness.setLocalStateField('user', {
       name: userName || 'Anonymous',
       color: '#' + Math.floor(Math.random()*16777215).toString(16)
     })
 
-    // 5. bind yjs to quill
+    // bind yjs to quill
     bindingRef.current = new QuillBinding(ytext, quillRef.current, providerRef.current.awareness)
 
     // prepopulate some boilerplate if empty
