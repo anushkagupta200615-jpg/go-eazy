@@ -9,6 +9,7 @@ import { useSelector } from 'react-redux'
 import { supabase } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 import { LocationPicker } from '../map/LocationPicker'
+import { useImageModeration } from '../../hooks/useImageModeration'
 
 // ── Success Overlay ───────────────────────────────────────────────────────────
 const ListingSuccessOverlay = () => (
@@ -95,6 +96,8 @@ export const PropertyForm = ({ initialData, isEdit = false }) => {
   const [step, setStep] = useState(1)
   const [images, setImages] = useState([])
   const [previewUrls, setPreviewUrls] = useState(initialData?.images || [])
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const { moderateImage, isModerationReady } = useImageModeration()
 
   const [form, setForm] = useState({
     title:             initialData?.title || '',
@@ -121,14 +124,37 @@ export const PropertyForm = ({ initialData, isEdit = false }) => {
     setForm(f => ({ ...f, latitude, longitude, map_address: map_address || '' }))
   }
 
-  const handleImageChange = (e) => {
+  const handleImageChange = async (e) => {
     const files = Array.from(e.target.files)
     if (files.length + previewUrls.length > 3) { toast.error('Maximum 3 images allowed'); return }
+    
     for (const file of files) {
       if (file.size > 7 * 1024 * 1024) { toast.error(`Image ${file.name} exceeds 7MB limit`); return }
     }
-    setImages(prev => [...prev, ...files])
-    setPreviewUrls(prev => [...prev, ...files.map(f => URL.createObjectURL(f))])
+
+    if (isModerationReady) {
+      setIsAnalyzing(true)
+      const safeFiles = []
+      for (const file of files) {
+        toast.loading(`Scanning ${file.name} for safety...`, { id: 'scan' })
+        const result = await moderateImage(file)
+        if (result.isSafe) {
+          safeFiles.push(file)
+        } else {
+          toast.error(`Image "${file.name}" blocked: ${result.reason}`, { duration: 5000, id: 'scan' })
+        }
+      }
+      toast.dismiss('scan')
+      setIsAnalyzing(false)
+      
+      if (safeFiles.length === 0) return
+      
+      setImages(prev => [...prev, ...safeFiles])
+      setPreviewUrls(prev => [...prev, ...safeFiles.map(f => URL.createObjectURL(f))])
+    } else {
+      setImages(prev => [...prev, ...files])
+      setPreviewUrls(prev => [...prev, ...files.map(f => URL.createObjectURL(f))])
+    }
   }
 
   const removeImage = (index) => {
@@ -380,10 +406,16 @@ export const PropertyForm = ({ initialData, isEdit = false }) => {
               </div>
             ))}
             {previewUrls.length < 3 && (
-              <label className="aspect-video rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 flex flex-col items-center justify-center cursor-pointer hover:border-[#CA3433] hover:bg-red-50/30 transition-colors text-gray-500">
+              <label className="aspect-video rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 flex flex-col items-center justify-center cursor-pointer hover:border-[#CA3433] hover:bg-red-50/30 transition-colors text-gray-500 relative overflow-hidden">
+                {isAnalyzing && (
+                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm z-10">
+                     <svg className="animate-spin w-6 h-6 text-[#CA3433] mb-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                     <span className="text-xs font-bold text-[#CA3433]">Scanning...</span>
+                   </div>
+                )}
                 <ImageIcon size={24} className="mb-2" />
                 <span className="text-sm font-semibold">Add Photo</span>
-                <input id="property-images" type="file" multiple accept="image/*" className="hidden" onChange={handleImageChange} />
+                <input id="property-images" type="file" multiple accept="image/*" className="hidden" onChange={handleImageChange} disabled={isAnalyzing} />
               </label>
             )}
           </div>
