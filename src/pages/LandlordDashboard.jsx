@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Home, Eye, Edit, Trash2, ArrowRight, ArrowLeft, List as ListIcon, Calendar, Check, X } from 'lucide-react'
+import { Plus, Home, Eye, Edit, Trash2, ArrowRight, ArrowLeft, List as ListIcon, Calendar, Check, X, Wrench, GripVertical } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../hooks/useAuth'
 import { useProperties } from '../hooks/useProperties'
 import { Button } from '../components/ui/Button'
@@ -23,10 +24,29 @@ export const LandlordDashboard = () => {
   const [loadingVisits, setLoadingVisits] = useState(true)
   const [actioningVisitId, setActioningVisitId] = useState(null)
 
+  // Maintenance Tickets
+  const [tickets, setTickets] = useState([])
+  const [loadingTickets, setLoadingTickets] = useState(true)
+
   useEffect(() => {
     if (user) {
       loadProperties()
       loadSiteVisits()
+      loadTickets()
+
+      const ticketsSub = supabase.channel('landlord_tickets')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_tickets', filter: `landlord_id=eq.${user.id}` }, payload => {
+          if (payload.eventType === 'INSERT') {
+             loadTickets()
+          } else if (payload.eventType === 'UPDATE') {
+             setTickets(prev => prev.map(t => t.id === payload.new.id ? { ...t, status: payload.new.status } : t))
+          }
+        })
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(ticketsSub)
+      }
     }
   }, [user])
 
@@ -100,6 +120,50 @@ export const LandlordDashboard = () => {
     } finally {
       setActioningVisitId(null)
     }
+  }
+
+  const loadTickets = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('maintenance_tickets')
+        .select('*, property:properties(title), tenant:profiles!tenant_id(full_name)')
+        .eq('landlord_id', user.id)
+        .order('created_at', { ascending: false })
+      
+      if (error) throw error
+      setTickets(data || [])
+    } catch (err) {
+      console.error('Failed to load tickets:', err)
+    } finally {
+      setLoadingTickets(false)
+    }
+  }
+
+  const handleDragStart = (e, ticketId) => {
+    e.dataTransfer.setData('ticketId', ticketId)
+  }
+
+  const handleDrop = async (e, newStatus) => {
+    e.preventDefault()
+    const ticketId = e.dataTransfer.getData('ticketId')
+    if (!ticketId) return
+
+    // Optimistic update
+    setTickets(prev => prev.map(t => t.id === ticketId ? { ...t, status: newStatus } : t))
+
+    try {
+      const { error } = await supabase.from('maintenance_tickets').update({ status: newStatus }).eq('id', ticketId)
+      if (error) throw error
+      toast.success(`Ticket moved to ${newStatus}`)
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to update ticket status')
+      loadTickets() // Revert
+    }
+  }
+
+  const allowDrop = (e) => {
+    e.preventDefault()
   }
 
   const totalListings = properties.length
@@ -210,6 +274,72 @@ export const LandlordDashboard = () => {
             </div>
           </div>
         )}
+
+        {/* Maintenance Tickets Kanban */}
+        <div className="mb-12">
+          <h2 className="text-xl font-bold text-gray-900 font-display mb-4 flex items-center gap-2">
+            <Wrench size={20} className="text-blue-500" />
+            Maintenance Requests
+          </h2>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {['Pending', 'In-Progress', 'Resolved'].map(status => (
+              <div 
+                key={status}
+                className="bg-gray-100 dark:bg-gray-800 rounded-2xl p-4 flex flex-col h-full min-h-[300px]"
+                onDragOver={allowDrop}
+                onDrop={(e) => handleDrop(e, status)}
+              >
+                <div className="flex items-center justify-between mb-4 px-1">
+                  <h3 className="font-bold text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${status === 'Resolved' ? 'bg-green-500' : status === 'In-Progress' ? 'bg-blue-500' : 'bg-yellow-500'}`}></span>
+                    {status}
+                  </h3>
+                  <span className="text-xs font-bold text-gray-500 bg-white dark:bg-gray-700 px-2.5 py-0.5 rounded-full shadow-sm">
+                    {tickets.filter(t => t.status === status).length}
+                  </span>
+                </div>
+                
+                <div className="flex-1 space-y-3">
+                  <AnimatePresence>
+                    {tickets.filter(t => t.status === status).map(ticket => (
+                      <motion.div
+                        layout
+                        layoutId={`ticket-${ticket.id}`}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        transition={{ duration: 0.2 }}
+                        key={ticket.id}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, ticket.id)}
+                        className="bg-white dark:bg-gray-700 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-600 cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow relative group"
+                      >
+                        <div className="absolute top-4 right-4 text-gray-300 group-hover:text-gray-400">
+                          <GripVertical size={16} />
+                        </div>
+                        <h4 className="font-bold text-gray-900 dark:text-white pr-6 text-sm mb-1 line-clamp-1">{ticket.title}</h4>
+                        <p className="text-xs font-semibold text-[#CA3433] mb-2 truncate">{ticket.property?.title}</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2 mb-3 bg-gray-50 dark:bg-gray-800 p-2 rounded-md">{ticket.description}</p>
+                        
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-600">
+                          <span className="text-[10px] text-gray-500 font-medium">By {ticket.tenant?.full_name?.split(' ')[0] || 'Tenant'}</span>
+                          <span className="text-[10px] text-gray-400 font-bold uppercase">{new Date(ticket.created_at).toLocaleDateString()}</span>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  
+                  {!loadingTickets && tickets.filter(t => t.status === status).length === 0 && (
+                    <div className="h-24 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-xl flex items-center justify-center">
+                      <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Drop Here</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* Listings Header */}
         <div className="flex items-center justify-between mb-6">
